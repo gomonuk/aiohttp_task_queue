@@ -15,5 +15,5 @@ make_tasks:
 	curl -X POST 0.0.0.0:5000/make_task -d '{"scripts": "test.py"}'
 
 get_status:
-	curl -X POST 0.0.0.0:5000/get_status -d '{"id": "4"}'
+	curl -X POST 0.0.0.0:5000/get_status -d '{"id": "28"}'
 

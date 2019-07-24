@@ -1,19 +1,13 @@
-import json
-from subprocess import Popen, PIPE
-
 import asyncio
-from aiohttp import web, web_runner
-from psycopg2.extensions import AsIs
+import json
 
-from databases.tasks_table_operations import TasksTableOperations
-from databases.redis_db import Semaphore, Stack
+from aiohttp import web_runner, web
+
+from src import tasks_table, stack
 
 HOST = "0.0.0.0"
 PORT = 5000
 TASK_SCRIPTS = ("test.py", "test_long_wait.py", "test_exit_100.py")
-
-tasks_table = TasksTableOperations()
-stack = Stack()
 
 
 class WebRunnerTCPSite(web_runner.BaseSite):
@@ -78,54 +72,3 @@ class WebServer(object):
         result = {"status": row["status"], "create_time": row["create_time"], "start_time": row["start_time"],
                   "time_to_execute": row["exec_time"]}
         return web.Response(body=json.dumps({"result": result, "error": None}, default=str))
-
-
-class TaskManager(object):
-    def __init__(self, loop=None):
-        if loop is None:
-            loop = asyncio.get_event_loop()
-        self.loop = loop
-        asyncio.ensure_future(self.task_process(), loop=self.loop)
-
-    async def task_process(self):
-        semaphore = Semaphore(2)
-        running_procs = []
-
-        while self.loop.is_running():
-            if semaphore > 0:
-                task = stack.blpop()
-                if task:
-                    process = Popen(["python3", "task_scripts/" + task["name"]], stdout=PIPE, stderr=PIPE)
-                    tasks_table.update(identifier=task["id"], data={"status": "run", "start_time": "now()", "pid": process.pid})
-                    running_procs.append(process)
-                    semaphore.decr()  # выполняем задачу из стека
-
-            for proc in running_procs:
-                retcode = proc.poll()
-
-                if retcode is not None:  # Процесс завершился.
-                    print("Process finished, retcode: ", retcode, "args:", proc.args)
-                    running_procs.remove(proc)
-                    tasks_table.update(identifier=proc.pid, data={"status": "completed", "exec_time": AsIs("now() - start_time")}, search_by="pid")
-                    semaphore.incr()
-                    break
-                else:  # Спим и проверяем ещё раз.
-                    await asyncio.sleep(.1)
-
-            await asyncio.sleep(.1)
-
-
-if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    WebServer(loop=loop)
-    TaskManager(loop=loop)
-    try:
-        loop.run_forever()
-    except KeyboardInterrupt:
-        tasks = asyncio.gather(
-            *asyncio.Task.all_tasks(loop=loop),
-            loop=loop,
-            return_exceptions=True
-        )
-        tasks.add_done_callback(lambda t: loop.stop())
-        tasks.cancel()
